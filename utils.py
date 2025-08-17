@@ -19,7 +19,6 @@ def remove_subsequences(df):
     # remove duplicates from indices_to_drop
     indices_to_drop = list(set(indices_to_drop))
     # check that max indices_to_drop is less than length of df
-    print(max(indices_to_drop) >= len(df))
     df = df.drop(indices_to_drop).reset_index(drop=True)
     return df
 
@@ -37,7 +36,7 @@ def merge_and_process(df1, df2, how='outer', clean=False):
         merged = remove_subsequences(merged)
 
     merged['Enrichment'] = np.log2((merged['Count_y'] + 1) / (merged['Count_x'] + 1))
-    merged['CPM'] = np.log2((merged['Count_y'] + 1) )# / sum(merged['Count_y']) * 1e6)
+    merged['CPM'] = np.log2((merged['Count_y'] + 1) / sum(merged['Count_y']) * 1e6)
 
     return merged, sum(merged['Count_y']) * 1e6
 
