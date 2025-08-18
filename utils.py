@@ -1,6 +1,9 @@
 import pandas as pd
 import numpy as np
 
+from tqdm import tqdm
+import re
+from collections import defaultdict
 
 def remove_subsequences(df):
     sequences = df['Sequence'].tolist()
@@ -26,6 +29,8 @@ def merge_and_process(df1, df2, how='outer', clean=False):
     merged = pd.merge(df1, df2, on='Sequence', how=how)
     merged['Count_y'] = merged['Count_y'].fillna(0)
     merged['Count_x'] = merged['Count_x'].fillna(0)
+    merged['Boltz_Distrib'] = merged['Boltz_Distrib_x'].fillna(merged['Boltz_Distrib_y'])
+    merged['Neighborhood_vecs'] = merged['Neighborhood_vecs_x'].fillna(merged['Neighborhood_vecs_y'])
 
     if clean:
         # REMOVE ZOMBIES
@@ -78,10 +83,11 @@ def get_libs(df_9th, df_12th, df_13th, df_16th, clean=False):
 
 
     df_all = pd.concat([lib1_merged, lib2_merged[~lib2_overlap]], ignore_index=True)
-    df_all = df_all.groupby("Sequence", as_index=False)[['CPM', 'Enrichment']].agg('max')
+    df_all = df_all.groupby("Sequence", as_index=False)[['CPM', 'Enrichment', 'Boltz_Distrib', 'Neighborhood_vecs']].agg('max')
 
     # are there duplicates
     print(f"df_all duplicate sequences: {df_all['Sequence'].duplicated().sum()}")
+    print(df_all.columns)
 
     return lib1_merged, lib2_merged, df_all, lib1_overlap, lib2_overlap
 

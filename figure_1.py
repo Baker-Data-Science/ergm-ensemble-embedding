@@ -82,6 +82,7 @@ indices_bad = df_raw[(df_raw['Enrichment'] <= mean_enrichment - 2 * stdv_enrichm
 
 null_check = list(np.intersect1d(bottom_enrichment_indices, top_enrichment_indices))
 
+print(f"Total data {(len(df_raw))}")
 print(f"Adversaries {len(df_missing)}")
 print(f"Good Anomalies {len(indices_good)}")
 print(f"Bad Anomalies {len(indices_bad)}")
