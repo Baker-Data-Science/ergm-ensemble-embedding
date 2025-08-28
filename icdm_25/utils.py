@@ -5,6 +5,18 @@ from tqdm import tqdm
 import re
 from collections import defaultdict
 
+def redistribute_uniform(group):
+    n = len(group)
+    return np.linspace(0, 1, n, endpoint=False) + (0.5 / n)
+def redistribute_to_quantile_range(group, q_bin, total_bins):
+    # separate q_bin into the right bin integer
+    q_bin = int(q_bin.split('Q')[1])
+    n = len(group)
+    rel_pos = np.linspace(0, 1, n, endpoint=False) + (0.5 / n)  # [0,1) within group
+    start = q_bin / total_bins
+    width = 1.0 / total_bins
+    return start + rel_pos[::-1] * width  # map into bin's range
+
 def remove_subsequences(df):
     sequences = df['Sequence'].tolist()
     indices_to_drop = []
@@ -44,6 +56,8 @@ def merge_and_process(df1, df2, how='outer', clean=False):
     merged['Pressure'] = (merged['Count_y']  - merged['Count_x']) / (merged['Count_x'] + 1)
     merged['CPM'] = np.log2((merged['Count_y'] + 1) / sum(merged['Count_y']) * 1e6)
 
+    groups = []
+    n_bins = 7
     group_low = merged[merged['Count_y'].between(0, 5)].copy()
     group_low['Bin_Label'] = -1
     groups.append(group_low)
@@ -57,6 +71,7 @@ def merge_and_process(df1, df2, how='outer', clean=False):
         .apply(lambda g: pd.Series(redistribute_to_quantile_range(g, g['Bin_Label'].iloc[0], n_bins),
                index = g.index))
     )
+    merged['Redist_Count'] = df_rest['Redist_Count']
 
     return merged, sum(merged['Count_y']) * 1e6
 

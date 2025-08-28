@@ -34,27 +34,27 @@ _, _, df_raw, _, _ = get_libs(df_9th, df_12th, df_13th, df_16th, clean=False)
 df_missing = df_raw[~df_raw['Sequence'].isin(df_all['Sequence'])]
 df_both = df_raw[df_raw['Sequence'].isin(df_all['Sequence'])]
 
-#x = df_all["CPM"].values
-XMIN = df_all["CPM"].min()
-XMAX = df_all["CPM"].max()
+#x = df_all["Redist_Count"].values
+XMIN = df_all["Redist_Count"].min()
+XMAX = df_all["Redist_Count"].max()
 YMIN = df_all["Pressure"].min()
 YMAX = df_all["Pressure"].max()
 
 
-top_enrichment = np.percentile(df_all['Pressure'], 99.25)
+top_enrichment = np.percentile(df_all['Pressure'], 99)
 bottom_enrichment = np.percentile(df_all['Pressure'], 99)
 top_enrichment_indices = df_all[df_all['Pressure'] >= top_enrichment].index.values
 bottom_enrichment_indices = df_all[df_all['Pressure'] < bottom_enrichment].index.values
 
-top_cpm = np.percentile(df_all['CPM'], 2)
-bottom_cpm = np.percentile(df_all['CPM'], .99)
-top_cpm_indices = df_all[df_all['CPM'] >= top_cpm].index.values
-bottom_cpm_indices = df_all[df_all['CPM'] < bottom_cpm].index.values
+top_cpm = np.percentile(df_all['Redist_Count'], 98)
+bottom_cpm = np.percentile(df_all['Redist_Count'], 98)
+top_cpm_indices = df_all[df_all['Redist_Count'] >= top_cpm].index.values
+bottom_cpm_indices = df_all[df_all['Redist_Count'] < bottom_cpm].index.values
 
 print(f"Top Enrichment: {top_enrichment} ({len(top_enrichment_indices)})")
 print(f"Bottom Enrichment: {bottom_enrichment} ({len(bottom_enrichment_indices)})")
-print(f"Top CPM: {top_cpm} ({len(top_cpm_indices)})")
-print(f"Bottom CPM: {bottom_cpm} ({len(bottom_cpm_indices)})")
+print(f"Top Redist_Count: {top_cpm} ({len(top_cpm_indices)})")
+print(f"Bottom Redist_Count: {bottom_cpm} ({len(bottom_cpm_indices)})")
 
 
 
@@ -72,15 +72,15 @@ df_raw_bad_sequences = df_raw[df_raw['Sequence'].isin(df_all_bad_sequences)]
 mean_enrichment = df_both['Pressure'].mean()
 stdv_enrichment = df_both['Pressure'].std()
 
-mean_cpm = df_both['CPM'].mean()
-stdv_cpm = df_both['CPM'].std()
+mean_cpm = df_both['Redist_Count'].mean()
+stdv_cpm = df_both['Redist_Count'].std()
 
 indices_good = df_raw[(df_raw['Pressure'] >= top_enrichment) & (df_raw['Sequence'].isin(df_all['Sequence']))
-                     & (df_raw['CPM'] <= bottom_cpm)
+                     & (df_raw['Redist_Count'] <= bottom_cpm)
                       ].index.values
 
 indices_bad = df_raw[(df_raw['Pressure'] <= bottom_enrichment) & (df_raw['Sequence'].isin(df_all['Sequence']))
-                     & (df_raw['CPM'] >= top_cpm)
+                     & (df_raw['Redist_Count'] >= top_cpm)
                      ].index.values
 
 null_check = list(np.intersect1d(bottom_enrichment_indices, top_enrichment_indices))
@@ -120,41 +120,41 @@ axHisty.yaxis.set_major_formatter(nullfmt)
 print(df_all.shape)
 # SCATTER PLOT
 # =============
-x = df_all["CPM"].values
+x = df_all["Redist_Count"].values
 y = df_all["Pressure"].values
 
-x_raw = df_raw["CPM"].values
+x_raw = df_raw["Redist_Count"].values
 y_raw = df_raw["Pressure"].values
 
-x_both = df_both["CPM"].values
+x_both = df_both["Redist_Count"].values
 y_both = df_both["Pressure"].values
 
 
 df_first = df_both[~(df_both['Sequence'].isin(df_raw['Sequence'][indices_good]))]
 df_first = df_first[~(df_first['Sequence'].isin(df_raw['Sequence'][indices_bad]))]
-x_first = df_first["CPM"].values
+x_first = df_first["Redist_Count"].values
 y_first = df_first["Pressure"].values
 
 axJoint.scatter(x_first, y_first, c='black', s=.8*ring, alpha=0.9, label='SELEX Data')
 
 
-#axJoint.scatter(df_missing["CPM"].values, df_missing["Pressure"].values,
+#axJoint.scatter(df_missing["Redist_Count"].values, df_missing["Pressure"].values,
                 #c='orange', alpha=0.9, label='Adversaries',
                 #s=ring, marker='o')
 
-axJoint.scatter(x_raw[indices_good], y_raw[indices_good], c='#6c8ebf', s=ring, alpha=0.9, label='LC-HP Anomalies', marker='o')
-axJoint.scatter(x_raw[indices_bad], y_raw[indices_bad], c='#b85450', s=ring, alpha=0.9, label='HC-LP Anomalies', marker='o')
+axJoint.scatter(x_raw[indices_good], y_raw[indices_good], c='green', s=ring, alpha=0.9, label='LC-HP Anomalies', marker='o')
+axJoint.scatter(x_raw[indices_bad], y_raw[indices_bad], c='red', s=ring, alpha=0.9, label='HC-LP Anomalies', marker='o')
 
 
 
-xlabel = "Count Per Million"
+xlabel = "Normalied Count"
 ylabel = "Selective Pressure"
 axJoint.set_xlabel(xlabel)
 axJoint.set_ylabel(ylabel)
-axJoint.set_xlim(x_first.min()-.2,x_first.max()+.2)
-axJoint.set_ylim(y_first.min()-.2,y_first.max()+.2)
+axJoint.set_xlim(x_first.min()-.02,x_first.max()+.05)
+axJoint.set_ylim(y_first.min()-.5,y_first.max()+.5)
 
-axJoint.legend(loc='upper right', fontsize=30, markerscale=2.0, bbox_to_anchor=(1.52,1.55), handletextpad=0.2, handlelength=0.6)
+axJoint.legend(loc='upper right', fontsize=30, markerscale=2.0, bbox_to_anchor=(1.53,1.55), handletextpad=0.2, handlelength=0.6)
 
 
 # HISTOGRAMS
@@ -165,8 +165,8 @@ nxbins = 50
 
 xbins = np.linspace(x_both.min(), x_both.max(), nxbins)
 axHistx.hist(x_both, bins=xbins, color='black', edgecolor='black', alpha=0.8)
-axHistx.hist(x_raw[indices_good], bins=xbins, color='#6c8ebf', edgecolor='black', alpha=0.8)
-axHistx.hist(x_raw[indices_bad], bins=xbins, color='#b85450', edgecolor='black', alpha=0.8)
+axHistx.hist(x_raw[indices_good], bins=xbins, color='green', edgecolor='black', alpha=0.8)
+axHistx.hist(x_raw[indices_bad], bins=xbins, color='red', edgecolor='black', alpha=0.8)
 
 axHistx.set_xlim(axJoint.get_xlim())
 axHistx.set_yscale('log')   # log scale for counts of x
@@ -183,7 +183,7 @@ axHisty.hist(y_both, bins=ybins, color='black', edgecolor='black', alpha=0.8, or
 #axHisty.hist(y_raw[indices_good], bins=ybins, color='#6c8ebf', edgecolor='black', alpha=0.8, orientation='horizontal')
 #axHisty.hist(y_raw[indices_bad], bins=ybins, color='#b85450', edgecolor='black', alpha=0.8, orientation='horizontal')
 # stack these on top  of the previous histogram
-axHisty.hist([y_raw[indices_good], y_raw[indices_bad]], bins=ybins, color=['#6c8ebf','#b85450'], edgecolor='black', alpha=0.8, orientation='horizontal', stacked=True)
+axHisty.hist([y_raw[indices_good], y_raw[indices_bad]], bins=ybins, color=['green','red'], edgecolor='black', alpha=0.8, orientation='horizontal', stacked=True)
 
 axHisty.set_ylim(axJoint.get_ylim())
 axHisty.set_xscale('log')   # log scale for counts of y
@@ -191,4 +191,4 @@ axHisty.xaxis.set_major_locator(MaxNLocator(4))
 axHisty.set_xticks([1e1, 1e2, 1e3], ['10', '100', '1000'], rotation=45)  # set x-ticks for log scale
 
 
-plt.savefig('./data/figure_1.png', bbox_inches='tight')
+plt.savefig('./data/icdm_figure_3.png', format='png', bbox_inches='tight')

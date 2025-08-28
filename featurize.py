@@ -1,15 +1,19 @@
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from functools import lru_cache
+import gc
 import hashlib
 from itertools import product
 import math
 import os
 from typing import List, Tuple, Dict, Set
 
+import ipdb
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy.sparse import csr_matrix, save_npz
 from tqdm import tqdm
 
 import networkx as nx
@@ -112,6 +116,7 @@ class EnergyDict(dict):
 
 
 def parse_dotbracket(dotbracket: str) -> List[Tuple[int, int]]:
+    """Parses a dot-bracket notation string into a list of pairs (i, j)."""
     stack = []
     pairs = []
     for i, c in enumerate(dotbracket):
@@ -123,6 +128,7 @@ def parse_dotbracket(dotbracket: str) -> List[Tuple[int, int]]:
     return sorted(pairs)
 
 def build_pair_map(pairs: List[Tuple[int, int]]) -> Dict[int, int]:
+    """Builds a mapping of pairs (i, j) and undirected (j, i)."""
     pair_map = {i: j for i, j in pairs}
     pair_map.update({j: i for i, j in pairs})
     return pair_map
@@ -141,6 +147,7 @@ def find_nested(pairs: List[Tuple[int, int]], i: int, j: int) -> List[Tuple[int,
 # SAFE ENERGY WRAPPERS  (PATCH)
 # ---------------------------
 def _safe_stack(seq, i, i1, j, j1, temp, emap) -> float:
+    """Stack with robust lookups; uses pair-string keys consistently."""
     try:
         pair = _pair(seq, i, i1, j, j1)  # e.g., 'AG/TC'
         if not pair:
@@ -154,12 +161,14 @@ def _safe_stack(seq, i, i1, j, j1, temp, emap) -> float:
         return 0.0
 
 def _safe_bulge(seq, i, i1, j, j1, temp, emap) -> float:
+    """Bulge with robust lookups; uses pair-string keys consistently."""
     try:
         return _bulge(seq, i, i1, j, j1, temp, emap)
     except Exception:
         return 0.0
 
 def _safe_internal_loop(seq, i, i1, j, j1, temp, emap) -> float:
+    """Internal loop with robust lookups; uses pair-string keys consistently."""
     try:
         return _internal_loop(seq, i, i1, j, j1, temp, emap)
     except Exception:
@@ -296,20 +305,10 @@ def reconstruct(i: int, j: int, seq: str, pair_map: Dict[int, int], pairs: List[
                 return [Struct(0.0, "BIFURCATION:FORCED(BOUNDS)", branches)] + branch_structs
 
         bifurc = safe_multi_branch(seq, i, j, temp, e_cache, emap, branches)  # PATCH: safe call
+        # I need to add the multbranch struct to the List
+
 
         return [bifurc] + branch_structs
-
-# ---------------------------
-# PUBLIC ENTRY
-# ---------------------------
-def reconstruct_structs_from_dotbracket(seq: str, dotbracket: str) -> List[Struct]:
-    """Top-level entry to kick off reconstruction safely."""
-    pairs = parse_dotbracket(dotbracket)
-    if not pairs:
-        return []
-    pair_map = build_pair_map(pairs)
-    i0, j0 = pairs[0][0], pairs[-1][1]  # outermost span
-    return reconstruct(i0, j0, seq, pair_map, pairs)
 
 
 def reconstruct_structs_from_dotbracket(seq: str, dotbracket: str) -> List[Struct]:
@@ -359,16 +358,20 @@ class FaceNode:
     struct: Struct                  # original Struct (unchanged)
 
 def head_pair(st: Struct) -> Tuple[int,int]:
+    """Extracts the defining (i, j) pair from a Struct object."""
     # each Struct you emit has exactly one defining (i,j) in st.ij
     return tuple(st.ij[0])
 
 def all_pairs(structs: List[Struct]) -> List[Tuple[int,int]]:
+    """Extracts all (i, j) pairs from a list of Struct objects."""
     return sorted(head_pair(s) for s in structs)
 
 def outermost_pairs(pairs: List[Tuple[int,int]]) -> List[Tuple[int,int]]:
+    """Finds outermost pairs (i, j) that are not nested within any other pair."""
     return [(i,j) for (i,j) in pairs if not any(a < i and j < b for (a,b) in pairs if (a,b) != (i,j))]
 
 def direct_children_of(pairs: List[Tuple[int,int]], i:int, j:int) -> List[Tuple[int,int]]:
+    """Finds direct children of the pair (i, j) that are strictly inside it,"""
     # children strictly inside (i,j) with none strictly between parent and child
     cand = [(a,b) for (a,b) in pairs if i < a < b < j]
     children = []
@@ -378,6 +381,7 @@ def direct_children_of(pairs: List[Tuple[int,int]], i:int, j:int) -> List[Tuple[
     return sorted(children)
 
 def make_face_node(seq: str, st: Struct, children: List[Tuple[int,int]]) -> FaceNode:
+    """Constructs a FaceNode from a Struct and its children pairs."""
     i, j = head_pair(st)
     # face type from description prefix; keep your richer desc if needed later
     face_type = st.desc.split(":")[0] if ":" in st.desc else st.desc
@@ -419,11 +423,11 @@ def build_dual_from_structs(seq: str, dotbracket: str):
     """
     structs: List[Struct] = reconstruct_structs_from_dotbracket(seq, dotbracket)
     if not structs:
-        return [], {EXTERIOR: []}, []
+        return [], {EXTERIOR: []}, [] # This is a strand
 
     # Map faces by (i,j)
     pairs = all_pairs(structs)
-    id_by_pair: Dict[Tuple[int,int], int] = {head_pair(s): k for k, s in enumerate(structs)}
+    id_by_pair: Dict[Tuple[int,int], int] = {head_pair(s): k for k, s in enumerate(structs)} 
 
     # Children relationships via pair inclusion
     children_by_pair: Dict[Tuple[int,int], List[Tuple[int,int]]] = {
@@ -459,36 +463,9 @@ def build_dual_from_structs(seq: str, dotbracket: str):
 
     return faces_meta, adj, tops
 
-
-# Visualize the dual (faces + EXTERIOR) as a tree/graph
-
-def label_from_face(node):
-    # node is a FaceNode
-    verts = ",".join(f"{b}{i}" for (b,i) in sorted(node.verts, key=lambda x: x[1]))
-    return f"{node.face_type}: {{{verts}}}" if verts else node.face_type
-
-def visualize_dual_with_labels(faces_meta, adj, figsize=(12, 8), root=None, highlight_path=None):
-    # Build graph
-    G = nx.Graph()
-    for u, nbrs in adj.items():
-        for v in nbrs:
-            G.add_edge(u, v)
-
-    # Positions (any layout you like)
-    pos = nx.spring_layout(G, seed=0)
-
-    # Labels: EXTERIOR plus one per face id
-    labels = {EXTERIOR: "EXTERIOR"}
-    for i, face in enumerate(faces_meta):
-        labels[i] = label_from_face(face)
-
-    plt.figure(figsize=figsize)
-    nx.draw(G, pos, node_size=800, with_labels=False)
-    nx.draw_networkx_labels(G, pos, labels=labels, font_size=8)
-    plt.axis("off")
-    plt.savefig("./data/dual_graph.png", dpi=300)
-
-##-------Balancing the dual tree--------------
+# ---------
+# Balancing
+# ---------
 
 def smallest_vertex_index(face) -> int:
     """Return smallest index in the node's verts; large sentinel if empty."""
@@ -557,10 +534,44 @@ def balance_root(faces, adj):
     center = choose_center(path, faces)
     return center, path
 
+# -------------
+# Visualization
+# -------------
+
+def label_from_face(node):
+    # node is a FaceNode
+    verts = ",".join(f"{b}{i}" for (b,i) in sorted(node.verts, key=lambda x: x[1]))
+    return f"{node.face_type}: {{{verts}}}" if verts else node.face_type
+
+def visualize_dual_with_labels(faces_meta, adj, figsize=(12, 8), root=None, highlight_path=None):
+    # Build graph
+    G = nx.Graph()
+    for u, nbrs in adj.items():
+        for v in nbrs:
+            G.add_edge(u, v)
+
+    # Positions (any layout you like)
+    pos = nx.spring_layout(G, seed=0)
+
+    # Labels: EXTERIOR plus one per face id
+    labels = {EXTERIOR: "EXTERIOR"}
+    for i, face in enumerate(faces_meta):
+        labels[i] = label_from_face(face)
+
+    plt.figure(figsize=figsize)
+    nx.draw(G, pos, node_size=800, with_labels=False)
+    nx.draw_networkx_labels(G, pos, labels=labels, font_size=8)
+    plt.axis("off")
+    plt.savefig("./data/dual_graph.png", dpi=300)
+
+
+
+
 
 # ============
 # FINGERPRINTS
 # ============
+
 @lru_cache(maxsize=None)
 def _safe_build_dual_from_structs(seq, db):
     try:
@@ -646,6 +657,117 @@ def _color2minindex_at_K(faces, adj, K):
             m[c] = idx1
     return m
 
+def _as_list_of_triples(cell):
+    """Normalize whatever is in the cell to: [(idx, val, (1, U)), ...] or []."""
+    if cell is None:
+        return []
+    # If someone stored it as a 2D object array of shape (k,3)
+    if isinstance(cell, np.ndarray) and cell.ndim == 2 and cell.shape[1] == 3:
+        return [ (cell[i,0], cell[i,1], cell[i,2]) for i in range(cell.shape[0]) ]
+    # If it's already a python list
+    if isinstance(cell, list):
+        return cell
+    # Fallback: wrap single dense vector
+    return [cell]
+
+def expected_vectors_from_boltz(dataframe, universe_size):
+    """
+    For each row (aptamer):
+      - grab its list of embedding vectors (aligned, length = universe_size)
+      - grab probs from Boltz_Distrib (already normalized to sum=1)
+      - compute weighted average: E[vec] = sum_j p_j * vec_j
+    Writes:
+      dataframe["NeighborhoodExpected"] -> 1 vector (np.ndarray, float) per aptamer
+      dataframe["NeighborhoodPresenceProb"] -> per-feature presence probability
+    """
+    exp_vectors = []
+    presence_prob_vectors = []
+
+    for i in range(len(dataframe)):
+        distrib = dataframe.at[i, "Boltz_Distrib"] or []
+        vecs = dataframe.at[i, "NeighborhoodEmbeddings"]
+        if vecs is None:
+            vecs = []
+
+        triples = _as_list_of_triples(vecs)
+        is_sparse = (len(triples) > 0 and isinstance(triples[0], tuple) and len(triples[0]) == 3  and isinstance(triples[0][0], np.ndarray))
+
+        if not vecs or not distrib:
+            exp_vectors.append(np.zeros(universe_size, dtype=float))
+            presence_prob_vectors.append(np.zeros(universe_size, dtype=float))
+            continue
+
+        # Extract probs (already normalized!)
+        probs = np.array([prob for (_, _, prob) in distrib], dtype=float)
+
+        if is_sparse:
+            # ---- Sparse path: vecs[t] = (idx:int[], val:uint32[], shape=(1,U)) ----
+            m = min(len(probs), len(triples))
+            E = np.zeros(U, dtype=np.float32)
+            P = np.zeros(U, dtype=np.float32)
+
+            for t in range(m):
+                p = probs[t]
+                if p <= 0:
+                    continue
+                idx, val, _shape = triples[t]
+                if idx.size == 0:
+                    continue
+                # val is your ordinal; presence is 1 for all active cols
+                E[idx] += p * val.astype(np.float32)
+                P[idx] += p
+
+            exp_vectors.append(E)
+            presence_prob_vectors.append(P)
+        else:
+            # Defensive length match
+            m = min(len(probs), V.shape[0])
+            V = V[:m]
+            probs = probs[:m]
+
+            # Expected embedding
+            E = probs @ V  # shape = (universe_size,)
+
+            # Per-feature presence probability
+            presence = (V > 0).astype(float)
+            P_present = probs @ presence
+
+            exp_vectors.append(E)
+            presence_prob_vectors.append(P_present)
+
+    dataframe["NeighborhoodExpected"] = exp_vectors
+    dataframe["NeighborhoodPresenceProb"] = presence_prob_vectors
+
+
+def build_sparse_neighborhood_embeddings(per_seq_color_maps, pos_global, U=None):
+    """
+    Produces dataframe['NeighborhoodEmbeddings'] in a RAM-light format:
+      For each sequence: a list over structures of tuples
+         (idx:int32[nnz], val:uint32[nnz], shape=(1,U))
+    """
+    if U is None:
+        U = len(pos_global)
+
+    embeddings_all = []
+    empty_idx = np.empty(0, dtype=np.int32)
+    empty_val = np.empty(0, dtype=np.uint32)
+    empty_shape = (1, U)
+
+    for maps_for_seq in per_seq_color_maps:
+        row_list = []
+        for c2i in (maps_for_seq or []):
+            if not c2i:
+                row_list.append((empty_idx, empty_val, empty_shape))
+                continue
+            # map feature/color -> global column
+            idx = np.fromiter((pos_global[c] for c in c2i.keys()), dtype=np.int32)
+            val = np.fromiter((c2i[c] for c in c2i.keys()), dtype=np.uint32)
+            # keep indices sorted for painless merging later
+            order = np.argsort(idx)
+            row_list.append((idx[order], val[order], (1, U)))
+        embeddings_all.append(row_list)
+
+    return embeddings_all
 
 # ---------------------------
 # Helpers
@@ -694,35 +816,43 @@ if __name__=='__main__':
     df_13th = pd.read_csv("./data/df_13th.csv")
     df_16th = pd.read_csv("./data/df_16th.csv")
 
-    lib1_merged, lib2_merged, cleaned_df, lib1_overlap, lib2_overlap = get_libs(df_9th, df_12th, df_13th, df_16th, clean=True)
+    lib1_merged, lib2_merged, dataframe, lib1_overlap, lib2_overlap = get_libs(df_9th, df_12th, df_13th, df_16th, clean=False)
 
-    cleaned_df = parse_data_frame(cleaned_df)
+    dataframe = parse_data_frame(dataframe)
 
-    seq = cleaned_df.at[0, "Sequence"]
-
-
+    # TEST THE DUAL GRAPH
+    seq = dataframe.at[0, "Sequence"]
     distrib = compute_structure_probabilities(seq)
-    dotbracket = distrib[0][0]  # Get the first structure's dotbracket
+    dotbracket = distrib[2][0]  # Get the first structure's dotbracket
+
+    structs = reconstruct_structs_from_dotbracket(seq, dotbracket)
     faces, adj, top_paris = build_dual_from_structs(seq, dotbracket)
-    #visualize_dual_with_labels(faces, adj)
     center, diam_path = balance_root(faces, adj)
-    #visualize_dual_with_labels(faces, adj, root=center, highlight_path=diam_path)
-    # print the dot bracket
+
+    for struct in structs:
+        print(f"Struct: {struct.desc} | Energy: {struct.e} | Pairs: {struct.ij}")
+
     print("Dotbracket:", dotbracket)
-    print("Diameter path:", diam_path)
+    print("Faces:", len(faces), "Adjacency size:", (adj))
+    print("Diameter path:", diam_path, "| length =", len(diam_path))
     print("Chosen center:", center, "| tie-break key =", smallest_vertex_index(faces[center]))
+
+
+    visualize_dual_with_labels(faces, adj)
+    #visualize_dual_with_labels(faces, adj, root=center, highlight_path=diam_path)
 
     # ---------------------------
     # PASS A: build feature space
     # ---------------------------
-    K = 2
+    K = 4
     per_seq_color_maps = []   # list (per sequence) of list (per structure) of dict(color -> min_idx+1)
     universe_set = set()
     _debug = {"total": 0, "empty_faces": 0, "empty_colors": 0, "ok": 0, "exceptions": 0}
 
-    for i in tqdm(range(len(cleaned_df)), desc=f"Pass A: duals→colors @K={K}"):
-        seq = cleaned_df.at[i, "Sequence"]
-        distrib = cleaned_df.at[i, "Boltz_Distrib"] or []
+
+    for i in tqdm(range(len(dataframe)), desc=f"Pass A: duals→colors @K={K}"):
+        seq = dataframe.at[i, "Sequence"]
+        distrib = dataframe.at[i, "Boltz_Distrib"] or []
         maps_for_seq = []
         for (db, *_rest) in distrib:
             if not db:
@@ -760,153 +890,84 @@ if __name__=='__main__':
     print(f"[OK] Global universe size = {len(UNIVERSE)} at K={K}")
     print("DEBUG counts:", _debug)
 
-    # free as much ram as possibble by removing large data structures
-    del _debug, universe_set, df_9th, df_12th, df_13th, df_16th, lib1_merged, lib2_merged, lib1_overlap, lib2_overlap
-
     # ---------------------------
     # PASS B: Subgraph fingerprints creation
     # ---------------------------
 
-    aligned_embeddings = []
-    for maps_for_seq in tqdm(per_seq_color_maps, desc="Pass B: build aligned vectors"):
-        per_db_vecs = []
-        for c2i in maps_for_seq:
-            vec = np.zeros(len(UNIVERSE), dtype=int)
-            for c, idx1 in c2i.items():
-                j = pos_global.get(c)
-                if j is not None:
-                    vec[j] = idx1
-            per_db_vecs.append(vec)
-        aligned_embeddings.append(per_db_vecs)
-
-    # Attach results back
-    cleaned_df["NeighborhoodEmbeddings"] = aligned_embeddings
-    NEIGHBORHOOD_UNIVERSE = UNIVERSE  # optional save
-    ##FASTER PASS B: Batches##
-    import os, gc, numpy as np
-    from scipy.sparse import csr_matrix, save_npz
-    from tqdm import tqdm
-
-    out_dir = "embeddings_sparse"
+    out_dir = "./data"
     os.makedirs(out_dir, exist_ok=True)
 
-    U = len(UNIVERSE)
-    pos_global = {c: j for j, c in enumerate(UNIVERSE)}
+    # --- New PASS B: streaming expectations (no dense intermediates) ---
+    U = len(UNIVERSE)                 # universe size
+    dataframe["NeighborhoodEmbeddings"] = build_sparse_neighborhood_embeddings(
+        per_seq_color_maps, pos_global, U=U
+    )
+    # pos_global already built above from UNIVERSE:
+    # pos_global = {c: j for j, c in enumerate(UNIVERSE)}
 
-    batch_size = 500  # tune
-    seq_batch_path = []
-    seq_row_start  = []
-    seq_row_count  = []
+    NeighborhoodExpected = []
+    NeighborhoodPresenceProb = []
 
-    seq_idx = 0
-    nseq = len(per_seq_color_maps)
+    for i, maps_for_seq in tqdm(enumerate(per_seq_color_maps),
+                                total=len(per_seq_color_maps),
+                                desc="Pass B: streaming E/P"):
+        distrib = dataframe.at[i, "Boltz_Distrib"] or []
 
-    while seq_idx < nseq:
-        start_seq = seq_idx
-        end_seq   = min(seq_idx + batch_size, nseq)
-        chunk     = per_seq_color_maps[start_seq:end_seq]
+        if not maps_for_seq or not distrib:
+            NeighborhoodExpected.append((np.array([], dtype=np.int64),
+                                         np.array([], dtype=np.float32),
+                                         (1, U)))
+            NeighborhoodPresenceProb.append((np.array([], dtype=np.int64),
+                                             np.array([], dtype=np.float32),
+                                             (1, U)))
+            continue
 
-        rows, cols, data = [], [], []
-        row_cursor = 0
-        starts, counts = [], []
+        m = min(len(distrib), len(maps_for_seq))
+        E_map = defaultdict(np.float32)  # j -> E[idx]
+        P_map = defaultdict(np.float32)  # j -> presence prob
 
-        # Build a single CSR for this batch
-        for maps_for_seq in chunk:
-            seq_start = row_cursor
-            for r, c2i in enumerate(maps_for_seq):
-                if c2i:
-                    # map neighborhood color -> universe column, value = idx1
-                    for c, idx1 in c2i.items():
-                        j = pos_global.get(c)
-                        if j is not None:
-                            rows.append(row_cursor)
-                            cols.append(j)
-                            # idx1 is small (<= ~83), but use uint32 to be safe
-                            data.append(np.uint32(idx1))
-                row_cursor += 1
-            seq_count = row_cursor - seq_start
-            starts.append(seq_start)
-            counts.append(seq_count)
+        for t in range(m):
+            p_t = float(distrib[t][2])
+            if p_t <= 0:
+                continue
+            c2i = maps_for_seq[t] or {}
+            for c, idx1 in c2i.items():
+                j = pos_global.get(c)
+                if j is None:  # shouldn't happen if UNIVERSE built from maps
+                    continue
+                # expectation of ordinal (idx1) and presence probability
+                E_map[j] += np.float32(p_t * idx1)
+                P_map[j] += np.float32(p_t)
 
-        total_rows = row_cursor
-        if total_rows > 0:
-            mat = csr_matrix((np.array(data, dtype=np.uint32), (rows, cols)),
-                             shape=(total_rows, U), dtype=np.uint32)
+        if E_map:
+            idx = np.fromiter(E_map.keys(), dtype=np.int64)
+            datE = np.fromiter((E_map[j] for j in idx), dtype=np.float32)
+            datP = np.fromiter((P_map[j] for j in idx), dtype=np.float32)
+            order = np.argsort(idx)
+            NeighborhoodExpected.append((idx[order], datE[order], (1, U)))
+            NeighborhoodPresenceProb.append((idx[order], datP[order], (1, U)))
         else:
-            mat = csr_matrix((0, U), dtype=np.uint32)
+            NeighborhoodExpected.append((np.array([], dtype=np.int64),
+                                         np.array([], dtype=np.float32),
+                                         (1, U)))
+            NeighborhoodPresenceProb.append((np.array([], dtype=np.int64),
+                                             np.array([], dtype=np.float32),
+                                             (1, U)))
 
-        batch_path = os.path.join(out_dir, f"batch_{start_seq}.npz")
-        save_npz(batch_path, mat)
-        del mat, rows, cols, data
-        gc.collect()
-
-        # record per-seq metadata for this batch
-        for s in range(start_seq, end_seq):
-            seq_batch_path.append(batch_path)
-        seq_row_start.extend(starts)
-        seq_row_count.extend(counts)
-
-        seq_idx = end_seq
-
-    # attach to df (aligned one row per sequence)
-    cleaned_df["EmbeddingsBatchPath"] = seq_batch_path
-    cleaned_df["EmbeddingsRowStart"]  = seq_row_start
-    cleaned_df["EmbeddingsRowCount"]  = seq_row_count
+    dataframe["NeighborhoodExpected"] = NeighborhoodExpected
+    dataframe["NeighborhoodPresenceProb"] = NeighborhoodPresenceProb
 
     print("Batched embeddings written to", out_dir)
     ##----------Build expected ordinal vector for each sequence--------
-
-    def expected_vectors_from_boltz(cleaned_df, universe_size):
-        """
-        For each row (aptamer):
-          - grab its list of embedding vectors (aligned, length = universe_size)
-          - grab probs from Boltz_Distrib (already normalized to sum=1)
-          - compute weighted average: E[vec] = sum_j p_j * vec_j
-        Writes:
-          cleaned_df["NeighborhoodExpected"] -> 1 vector (np.ndarray, float) per aptamer
-          cleaned_df["NeighborhoodPresenceProb"] -> per-feature presence probability
-        """
-        exp_vectors = []
-        presence_prob_vectors = []
-
-        for i in range(len(cleaned_df)):
-            vecs = cleaned_df.at[i, "NeighborhoodEmbeddings"] or []
-            distrib = cleaned_df.at[i, "Boltz_Distrib"] or []
-
-            if not vecs or not distrib:
-                exp_vectors.append(np.zeros(universe_size, dtype=float))
-                presence_prob_vectors.append(np.zeros(universe_size, dtype=float))
-                continue
-
-            # Convert to array
-            V = np.asarray(vecs, dtype=float)
-            if V.ndim == 1:  # single structure edge-case
-                V = V[None, :]
-
-            # Extract probs (already normalized!)
-            probs = np.array([prob for (_, _, prob) in distrib], dtype=float)
-
-            # Defensive length match
-            m = min(len(probs), V.shape[0])
-            V = V[:m]
-            probs = probs[:m]
-
-            # Expected embedding
-            E = probs @ V  # shape = (universe_size,)
-
-            # Per-feature presence probability
-            presence = (V > 0).astype(float)
-            P_present = probs @ presence
-
-            exp_vectors.append(E)
-            presence_prob_vectors.append(P_present)
-
-        cleaned_df["NeighborhoodExpected"] = exp_vectors
-        cleaned_df["NeighborhoodPresenceProb"] = presence_prob_vectors
-    expected_vectors_from_boltz(cleaned_df, universe_size=len(NEIGHBORHOOD_UNIVERSE))
+    expected_vectors_from_boltz(dataframe, universe_size=len(UNIVERSE))
+    # save this to npz
+    # convert to scipy sparse matrix format
+    np.savez_compressed(os.path.join(out_dir, f"neighborhood_embeddings_{K}.npz"),
+                        NeighborhoodExpected=dataframe["NeighborhoodExpected"].values,
+                        NeighborhoodPresenceProb=dataframe["NeighborhoodPresenceProb"].values)
     print("[OK] NeighborhoodExpected and NeighborhoodPresenceProb added to DataFrame")
-    print("Example expected vector:", cleaned_df["NeighborhoodExpected"].iloc[0])
+    print("Example expected vector:", dataframe["NeighborhoodExpected"].iloc[0])
     # get the dim of the expected vectors
-    print("Expected vector dimension:", cleaned_df["NeighborhoodExpected"].iloc[0].shape)
+    print("Expected vector dimension:", dataframe["NeighborhoodExpected"].iloc[0].shape)
     # get how many non-zeros
-    print("Non-zero features in expected vector:", np.count_nonzero(cleaned_df["NeighborhoodExpected"].iloc[0]))
+    print("Non-zero features in expected vector:", np.count_nonzero(dataframe["NeighborhoodExpected"].iloc[0]))

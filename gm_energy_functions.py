@@ -490,7 +490,7 @@ def gm_multi_branch(
     e =  e_multibranch + e_sum
 
 
-    branches.remove((i,j))
+    #branches.remove((i,j))
     return Struct(e, f"BIFURCATION:{str(unpaired)}n/{str(branches_count)}h", branches)
 
 
