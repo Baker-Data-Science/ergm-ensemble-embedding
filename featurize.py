@@ -19,6 +19,8 @@ from tqdm import tqdm
 import networkx as nx
 import RNA
 
+from collections import Counter
+
 from dna import DNA_ENERGIES
 from gm_energy_functions import (
     _pair, _stack, _hairpin, _bulge, _internal_loop,
@@ -45,18 +47,18 @@ def compute_structure_probabilities(sequence, delta=500):
     R = 0.001987  # kcal/mol·K
     T = 310.15    # temperature in K (ViennaRNA default is 37°C)
 
-    # Step 1: Create fold compound and compute partition function
+    # Create fold compound and compute partition function
     fc = RNA.fold_compound(sequence)
     fc.pf()
     structure, G = RNA.pf_fold(sequence)
 
-    # Step 2: Compute partition function Z = exp(-G / RT)
+    # Compute partition function Z = exp(-G / RT)
     Z = math.exp(-G / (R * T))
 
-    # Step 3: Enumerate all suboptimal structures within delta * 0.01 kcal/mol of MFE
+    # Enumerate all suboptimal structures within delta * 0.01 kcal/mol of MFE
     subopts = fc.subopt(delta, sorted=1, nullfile=None)
 
-    # Step 4: Compute P(S_i | s) for each structure
+    # Compute P(S_i | s) for each structure
     result = []
     for s in subopts:
         if s.structure is None:  # End of list
@@ -66,7 +68,7 @@ def compute_structure_probabilities(sequence, delta=500):
         prob = weight / Z
         result.append((s.structure, E, prob))
 
-    # Step 5: Return top 50 by probability
+    # Return top 50 by probability
     result.sort(key=lambda x: -x[2])
     return result[:50]
 
@@ -149,12 +151,10 @@ def find_nested(pairs: List[Tuple[int, int]], i: int, j: int) -> List[Tuple[int,
 def _safe_stack(seq, i, i1, j, j1, temp, emap) -> float:
     """Stack with robust lookups; uses pair-string keys consistently."""
     try:
-        pair = _pair(seq, i, i1, j, j1)  # e.g., 'AG/TC'
+        pair = _pair(seq, i, i1, j, j1)
         if not pair:
-            # print(f"⚠️ Empty pair string in _safe_stack: ({i},{j})")
             return 0.0
         if pair not in emap.NN:
-            # print(f"⚠️ Unknown pair {pair} → patched (0,0)")
             emap.NN[pair] = (0.0, 0.0)
         return _stack(seq, i, i1, j, j1, temp, emap)
     except Exception:
@@ -219,7 +219,6 @@ def safe_multi_branch(seq, i, j, temp, e_cache, emap, branches: List[Tuple[int,i
     try:
         return gm_multi_branch(seq, i, j, temp, e_cache, emap, branches)
     except Exception as e:
-        # print(f"❌ gm_multi_branch failed at ({i},{j}): {e}")
         return Struct(0.0, f"BIFURCATION:FORCED({len(branches)} arms)", branches)
 
 # ---------------------------
@@ -305,8 +304,6 @@ def reconstruct(i: int, j: int, seq: str, pair_map: Dict[int, int], pairs: List[
                 return [Struct(0.0, "BIFURCATION:FORCED(BOUNDS)", branches)] + branch_structs
 
         bifurc = safe_multi_branch(seq, i, j, temp, e_cache, emap, branches)  # PATCH: safe call
-        # I need to add the multbranch struct to the List
-
 
         return [bifurc] + branch_structs
 
@@ -338,12 +335,55 @@ def reconstruct_structs_from_dotbracket(seq: str, dotbracket: str) -> List[Struc
             sub = reconstruct(i, j, seq, pair_map, pairs)
             structs.extend(sub)
         except Exception as e:
-            print(f"🔥 Error in reconstruct() for substructure ({i}, {j}) in dotbracket:\n{dotbracket}")
+            print(f"Error in reconstruct() for substructure ({i}, {j}) in dotbracket:\n{dotbracket}")
             print(f"Exception: {e}")
             raise  # Optionally remove this to skip over errors instead of halting
 
     return structs
 
+# ==========
+
+# EXPECTED BAG OF FACES
+# ==========
+
+def compute_expected_bag_of_faces(faces_energy_list, boltz_distrib, words0):
+    """
+    Given an aptamer's list of face-energy lists and its Boltzmann-distributed structures,
+    compute the expected bag-of-face (BoF) vector.
+
+    Args:
+        faces_energy_list: List of face-energy lists, one for each structure.
+            Example: [[('STACK:AC/TG', -1.45), ('STACK:CG/GC', -2.16)], ...]
+        boltz_distrib: List of (dotbracket, energy, prob) tuples for each structure.
+        words0: A list of all possible face descriptors (length 848).
+
+    Returns:
+        A numpy array of shape (848,) representing the expected BoF vector.
+    """
+    # Create an index map for words0 for fast lookup
+    face_to_idx = {face: idx for idx, face in enumerate(words0)}
+    vector_len = len(words0)
+
+    expected_vec = np.zeros(vector_len)
+
+    for struct_idx, face_energy in enumerate(faces_energy_list):
+        if struct_idx >= len(boltz_distrib):
+            continue  # skip if mismatch
+        _, _, prob = boltz_distrib[struct_idx]
+
+        # Count the number of times each face appears in the current structure
+        counts = Counter(face for face, _ in face_energy)
+
+        # Create the vector for this structure
+        struct_vec = np.zeros(vector_len)
+        for face, count in counts.items():
+            if face in face_to_idx:
+                struct_vec[face_to_idx[face]] = count
+
+        # Weight by probability
+        expected_vec += prob * struct_vec
+
+    return expected_vec
 
 # ==========
 
